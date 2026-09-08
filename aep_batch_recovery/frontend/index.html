@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEP Batch Recovery Agent</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">AR</span><div><strong>AEP Recovery</strong><small>Failed batch operations</small></div></div>
+    <p class="section-label">AGENT WORKFLOW</p>
+    <ol class="agents" id="agents">
+      <li data-step="0"><span>1</span><div><b>Batch Intake</b><small>Validate batch identifier</small></div></li>
+      <li data-step="1"><span>2</span><div><b>Failed File Retriever</b><small>Call Adobe failed endpoint</small></div></li>
+      <li data-step="2"><span>3</span><div><b>Validation Analyzer</b><small>Group schema violations</small></div></li>
+      <li data-step="3"><span>4</span><div><b>Recovery Advisor</b><small>Recommend governed fixes</small></div></li>
+      <li data-step="4"><span>5</span><div><b>Incident Reporter</b><small>Prepare delivery update</small></div></li>
+    </ol>
+    <div class="security"><b>Secure by design</b><small>Credentials stay server-side. Failed customer records are not rendered.</small></div>
+  </aside>
+
+  <main>
+    <header>
+      <div><p class="eyebrow">ADOBE EXPERIENCE PLATFORM</p><h1>Batch Recovery Console</h1><p>Retrieve failed ingestion metadata and turn validation findings into actionable recovery steps.</p></div>
+      <div class="status"><span id="statusDot"></span><div><small>LIVE API</small><b id="apiStatus">Checking...</b></div></div>
+    </header>
+
+    <section class="workspace">
+      <form id="batchForm" class="input-panel">
+        <div class="panel-title"><div><h2>Batch Input</h2><p>Enter an Adobe Experience Platform batch ID.</p></div></div>
+        <label for="batchId">Batch ID</label>
+        <input id="batchId" name="batch_id" placeholder="Example: 01ABCDEF1234567890" maxlength="128" required autocomplete="off">
+        <button id="analyzeButton" type="submit">Analyze Failed Batch</button>
+        <p id="formMessage" class="form-message" aria-live="polite"></p>
+        <div class="endpoint"><small>ADOBE ENDPOINT</small><code>GET /data/foundation/export/batches/{batchId}/failed</code></div>
+      </form>
+
+      <section class="result-panel" aria-live="polite">
+        <div class="panel-title"><div><h2>Recovery Analysis</h2><p id="resultSubtitle">Waiting for a batch.</p></div><span class="badge" id="resultBadge">READY</span></div>
+        <div id="emptyState" class="empty-state">
+          <div class="pipeline-visual"><span>Batch</span><i></i><span>Failures</span><i></i><span>Recovery</span></div>
+          <h3>Live analysis will appear here</h3><p>The app returns validation metadata only, not rejected customer records.</p>
+        </div>
+        <div id="resultContent" class="results hidden">
+          <article class="summary"><small>BATCH SUMMARY</small><h3 id="summaryText"></h3></article>
+          <div class="metrics"><article><small>FAILED PATHS</small><b id="fileCount">0</b></article><article><small>BATCH / VALIDATION ERRORS</small><b id="errorCount">0</b></article><article><small>SELECTED PATH</small><b id="selectedFile">-</b></article></div>
+          <div class="result-grid">
+            <article><h3>Validation Findings</h3><div id="validationErrors"></div></article>
+            <article><h3>Recommended Recovery</h3><ol id="recommendations"></ol></article>
+          </div>
+          <details class="api-response">
+            <summary>Adobe API Response</summary>
+            <p>Sanitized response metadata. Credentials and failed source records are excluded.</p>
+            <pre id="apiResponse"></pre>
+          </details>
+          <article class="incident"><div><h3>Incident Update</h3><p id="incidentUpdate"></p></div><button type="button" id="copyButton" title="Copy incident update">Copy</button></article>
+        </div>
+      </section>
+    </section>
+    <footer>Built by Subasish for governed AEP ingestion recovery</footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+# Copyright 2026 Cognizant Technology Solutions Corp.
+# Licensed under the Apache License, Version 2.0.
+
+{
+    include "registries/aaosa.hocon",
+    include "registries/expertise_scoping_instructions.hocon",
+    include "config/llm_config.hocon",
+
+    "metadata": {
+        "description": "Retrieves Adobe Experience Platform failed ingestion files, analyzes validation metadata, recommends governed recovery actions, and drafts an operational update.",
+        "tags": ["Adobe Experience Platform", "batch-ingestion", "data-quality", "AAOSA", "tool"],
+        "sample_queries": [
+            "Analyze failed files for AEP batch 01ABCDEF1234567890 and prepare a recovery update."
+        ]
+    },
+
+    "instructions_prefix": """
+You are part of the AEP Batch Recovery Agent network.
+Never ask for or expose access tokens, API keys, organization IDs, or credential values in chat.
+Use the coded tool for Adobe API retrieval. Report validation metadata only, never failed customer records.
+Treat schema changes, mapping changes, replay, deletion, and re-ingestion as approval-required actions.
+""" ${expertise_scoping_instructions},
+
+    "tools": [
+        {
+            "name": "aep_batch_recovery_manager",
+            "function": {
+                "description": "Coordinates live analysis and governed recovery of an Adobe Experience Platform failed ingestion batch.",
+                "sly_data_output_schema": {
+                    "type": "object",
+                    "properties": {
+                        "aep_api_response": {
+                            "type": "object",
+                            "description": "Sanitized JSON responses from the Adobe batch-status and failed-batch operations."
+                        }
+                    }
+                }
+            },
+            "instructions": ${instructions_prefix} """
+You are the front-facing recovery coordinator.
+1. Ask for a valid AEP batch ID if none is supplied.
+2. Call failed_batch_retriever to list failed files.
+3. Select the first failed file when the user did not name one and clearly state that choice.
+4. Call validation_error_analyzer for that file.
+5. Call recovery_advisor to prepare safe corrective actions.
+6. Call incident_reporter to prepare a concise operational update.
+
+Return: Batch Summary, Failed Files, Validation Findings, Recommended Recovery, Approval Required, and Incident Update.
+""" ${aaosa_instructions},
+            "allow": {
+                "to_upstream": {
+                    "sly_data": ["aep_api_response"]
+                }
+            },
+            "tools": [
+                "failed_batch_retriever",
+                "validation_error_analyzer",
+                "recovery_advisor",
+                "incident_reporter"
+            ]
+        },
+        {
+            "name": "failed_batch_retriever",
+            "function": ${aaosa_call}{
+                "description": "Lists failed files for an AEP ingestion batch.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"batch_id": {"type": "string"}},
+                    "required": ["batch_id"]
+                }
+            },
+            "instructions": ${instructions_prefix} """
+Call aep_failed_batch_tool with operation get_batch_status to retrieve batch-level errors.
+Then call it with operation list_failed_files. Return only its safe metadata.
+""",
+            "allow": {
+                "to_upstream": {
+                    "sly_data": ["aep_api_response"]
+                }
+            },
+            "tools": ["aep_failed_batch_tool"]
+        },
+        {
+            "name": "validation_error_analyzer",
+            "function": ${aaosa_call}{
+                "description": "Inspects validation metadata for one failed AEP file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "batch_id": {"type": "string"},
+                        "failed_file": {"type": "string"}
+                    },
+                    "required": ["batch_id", "failed_file"]
+                }
+            },
+            "instructions": ${instructions_prefix} """
+Call aep_failed_batch_tool with operation inspect_failed_file. Group returned errors by keyword and pointer.
+Do not infer or reproduce the rejected source record.
+""",
+            "allow": {
+                "to_upstream": {
+                    "sly_data": ["aep_api_response"]
+                }
+            },
+            "tools": ["aep_failed_batch_tool"]
+        },
+        {
+            "name": "recovery_advisor",
+            "function": ${aaosa_call}{
+                "description": "Converts AEP validation findings into safe, governed recovery steps."
+            },
+            "instructions": ${instructions_prefix} """
+Recommend source transformation, mapping, or schema-validation checks supported by the findings.
+Separate diagnostic checks from approval-required changes and re-ingestion.
+"""
+        },
+        {
+            "name": "incident_reporter",
+            "function": ${aaosa_call}{
+                "description": "Drafts a concise batch failure and recovery update for delivery teams."
+            },
+            "instructions": ${instructions_prefix} """
+Write a concise update containing batch ID, failed-file count, selected file, validation categories,
+current action, approval dependency, and next update. Label unconfirmed conclusions as suspected.
+"""
+        },
+        {
+            "name": "aep_failed_batch_tool",
+            "function": {
+                "description": "Calls the live Adobe Experience Platform failed-batch API using server-side environment credentials.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["get_batch_status", "list_failed_files", "inspect_failed_file"]
+                        },
+                        "batch_id": {"type": "string"},
+                        "failed_file": {"type": "string"}
+                    },
+                    "required": ["operation", "batch_id"]
+                }
+            },
+            "class": "aep_batch_recovery.adobe_failed_batch.AdobeFailedBatch"
+        }
+    ]
+}
