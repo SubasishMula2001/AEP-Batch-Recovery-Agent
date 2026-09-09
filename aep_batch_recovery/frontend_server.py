@@ -61,7 +61,15 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     batch_errors = batch_result.get("batch_errors", [])
     batch_status = str(batch_result.get("batch_status", "unknown"))
     if not failed_files:
-        return _build_result(batch_id, [], None, batch_errors, batch_status)
+        return _build_result(
+            batch_id,
+            [],
+            None,
+            batch_errors,
+            batch_status,
+            None,
+            "Adobe Catalog batch errors" if batch_errors else "No structured errors returned",
+        )
     names = {str(entry.get("name")) for entry in failed_files if isinstance(entry, dict)}
     selected = request.failed_file or str(failed_files[0].get("name"))
     if selected not in names:
@@ -73,8 +81,17 @@ def analyze(request: AnalyzeRequest) -> dict[str, Any]:
     if not isinstance(inspected, dict) or not inspected.get("ok"):
         return {"ok": False, "stage": "Validation Analyzer", **dict(inspected)}
     errors = batch_errors or inspected.get("validation_errors", [])
+    error_source = (
+        "Adobe Catalog batch errors"
+        if batch_errors
+        else "Adobe failed-file validation metadata"
+        if errors
+        else "No structured errors returned"
+    )
 
-    return _build_result(batch_id, failed_files, selected, errors, batch_status)
+    return _build_result(
+        batch_id, failed_files, selected, errors, batch_status, inspected, error_source
+    )
 
 
 def _build_result(
@@ -83,6 +100,8 @@ def _build_result(
     selected: str | None,
     errors: list[dict[str, Any]],
     batch_status: str,
+    inspection: dict[str, Any] | None,
+    error_source: str,
 ) -> dict[str, Any]:
     categories = sorted({str(item.get("keyword", "validation")) for item in errors})
     actions = _recommend(errors)
@@ -107,6 +126,8 @@ def _build_result(
         "summary": summary,
         "failed_files": failed_files,
         "selected_file": selected,
+        "file_inspection": inspection,
+        "error_source": error_source,
         "validation_errors": errors,
         "categories": categories,
         "recommended_actions": actions,
@@ -120,6 +141,7 @@ def _build_result(
             "failed_export_response": {
                 "batch_id": batch_id,
                 "failed_paths": failed_files,
+                "selected_file_inspection": inspection,
             },
         },
     }

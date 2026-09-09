@@ -50,7 +50,11 @@ function render(data) {
   document.querySelector("#fileCount").textContent = data.failed_files.length;
   document.querySelector("#errorCount").textContent = data.validation_errors.length;
   document.querySelector("#selectedFile").textContent = data.selected_file || "None";
-  document.querySelector("#validationErrors").innerHTML = data.validation_errors.length ? data.validation_errors.map(item => `<div class="error-item"><b>${escapeHtml(item.keyword || "validation")}</b><div>${escapeHtml(item.message)}</div><code>${escapeHtml(item.pointerToViolation || "Pointer unavailable")}</code></div>`).join("") : "<p>No validation errors were returned.</p>";
+  document.querySelector("#errorSource").textContent = `Source: ${data.error_source}`;
+  const inspectionNote = data.file_inspection?.note;
+  document.querySelector("#validationErrors").innerHTML = data.validation_errors.length
+    ? data.validation_errors.map(item => `<div class="error-item"><b>${escapeHtml(item.keyword || "validation")}</b><div>${escapeHtml(item.message)}</div><code>${escapeHtml(item.pointerToViolation || "Pointer unavailable")}</code></div>`).join("")
+    : `<p>No structured record-level validation errors were returned.</p>${inspectionNote ? `<p>${escapeHtml(inspectionNote)}</p>` : ""}`;
   document.querySelector("#recommendations").innerHTML = data.recommended_actions.map(item => `<li>${escapeHtml(item)}</li>`).join("");
   document.querySelector("#apiResponse").textContent = JSON.stringify(data.api_response, null, 2);
   document.querySelector("#incidentUpdate").textContent = data.incident_update;

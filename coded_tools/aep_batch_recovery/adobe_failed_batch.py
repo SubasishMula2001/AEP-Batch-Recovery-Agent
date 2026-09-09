@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from typing import Any
@@ -142,7 +143,28 @@ class AdobeFailedBatch(CodedTool):
         if isinstance(response, dict):
             return response
 
-        payload = self._json(response)
+        try:
+            payload = response.json()
+        except ValueError:
+            content_type = str(response.headers.get("content-type", "application/octet-stream"))
+            errors = self._extract_json_lines_errors(response)
+            return {
+                "ok": True,
+                "operation": "inspect_failed_file",
+                "batch_id": batch_id,
+                "failed_file": failed_file,
+                "response_format": content_type.split(";", maxsplit=1)[0],
+                "validation_error_count": len(errors),
+                "validation_errors": errors,
+                "note": (
+                    "Adobe returned a file rather than a single JSON document. "
+                    "Only allow-listed validation metadata was extracted; rejected "
+                    "customer records were not retained or exposed."
+                ),
+            }
+
+        if not isinstance(payload, (dict, list)):
+            return {"ok": False, "error": "Adobe API returned an unsupported response."}
         if isinstance(payload, dict) and payload.get("ok") is False:
             return payload
 
@@ -155,6 +177,25 @@ class AdobeFailedBatch(CodedTool):
             "validation_error_count": len(errors),
             "validation_errors": errors,
         }
+
+    def _extract_json_lines_errors(self, response: Any) -> list[dict[str, str]]:
+        """Extract validation metadata from JSON Lines without retaining records."""
+        errors: list[dict[str, str]] = []
+        try:
+            lines = response.iter_lines(decode_unicode=True)
+            for index, line in enumerate(lines):
+                if index >= 1000 or len(errors) >= 100:
+                    break
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                errors.extend(self.extract_validation_errors(payload))
+        except (AttributeError, TypeError):
+            return []
+        return errors[:100]
 
     def _get_batch_status(self, batch_id: str) -> dict[str, Any]:
         response = self._request(f"{self.CATALOG_BASE_URL}/{batch_id}")

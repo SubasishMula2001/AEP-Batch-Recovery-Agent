@@ -107,6 +107,61 @@ def test_inspection_excludes_customer_record(get: Mock) -> None:
 
 
 @patch("coded_tools.aep_batch_recovery.adobe_failed_batch.requests.get")
+def test_non_json_failed_file_is_safely_described(get: Mock) -> None:
+    item = response({})
+    item.headers = {"content-type": "text/csv; charset=utf-8"}
+    item.json.side_effect = ValueError("not JSON")
+    item.content = b"email,firstName\nprivate@example.invalid,Private"
+    item.iter_lines.return_value = [
+        "email,firstName",
+        "private@example.invalid,Private",
+    ]
+    get.return_value = item
+
+    sly_data = {}
+    result = AdobeFailedBatch().invoke(
+        {
+            "operation": "inspect_failed_file",
+            "batch_id": "batch-123",
+            "failed_file": "failed.csv",
+        },
+        sly_data,
+    )
+
+    assert result["ok"] is True
+    assert result["response_format"] == "text/csv"
+    assert result["validation_errors"] == []
+    assert "private@example.invalid" not in str(result)
+    assert sly_data["aep_api_response"]["inspect_failed_file"] == result
+
+
+@patch("coded_tools.aep_batch_recovery.adobe_failed_batch.requests.get")
+def test_extracts_errors_from_json_lines_without_exposing_record(get: Mock) -> None:
+    item = response({})
+    item.headers = {"content-type": "application/x-ndjson"}
+    item.json.side_effect = ValueError("multiple JSON documents")
+    item.iter_lines.return_value = [
+        '{"xdmEntity":{"email":"private@example.invalid"},'
+        '"_validationErrors":[{"keyword":"format","message":"Invalid timestamp",'
+        '"pointerToViolation":"#/timestamp"}]}'
+    ]
+    get.return_value = item
+
+    result = AdobeFailedBatch().invoke(
+        {
+            "operation": "inspect_failed_file",
+            "batch_id": "batch-123",
+            "failed_file": "failed.jsonl",
+        },
+        {},
+    )
+
+    assert result["validation_error_count"] == 1
+    assert result["validation_errors"][0]["message"] == "Invalid timestamp"
+    assert "private@example.invalid" not in str(result)
+
+
+@patch("coded_tools.aep_batch_recovery.adobe_failed_batch.requests.get")
 def test_rejects_path_traversal_without_request(get: Mock) -> None:
     result = AdobeFailedBatch().invoke(
         {

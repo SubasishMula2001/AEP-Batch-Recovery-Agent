@@ -12,6 +12,11 @@ A standalone operational application and Neuro SAN agent network for investigati
 
 The application deliberately does **not** render the failed source record. It returns only allow-listed validation fields such as the keyword, message, violation pointer, and schema location.
 
+Adobe can return the final rejected file as CSV or another non-JSON format. In
+that case, the application does not parse or display customer rows. It continues
+successfully using the batch-level error codes and descriptions from Adobe
+Catalog and reports only the failed file's media type in the sanitized JSON.
+
 The custom frontend includes an expandable **Adobe API Response** section. It
 shows sanitized Catalog batch metadata and failed-export paths, but never shows
 authorization headers, API keys, access tokens, or raw failed customer records.
