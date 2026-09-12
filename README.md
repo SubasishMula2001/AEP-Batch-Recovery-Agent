@@ -36,16 +36,21 @@ cd AEP-Batch-Recovery-Agent
 2. Select **Code**, then **Download ZIP**.
 3. Extract the ZIP and open PowerShell in the extracted folder.
 
-To add the network and custom frontend to an existing Neuro SAN Studio checkout:
+To add the network and custom frontend to an existing Neuro SAN checkout:
 
 ```powershell
-.\scripts\install_into_neuro_san.ps1 -NeuroSanPath "C:\path\to\neuro-san-studio"
+.\scripts\install_into_neuro_san.ps1 -NeuroSanPath "C:\path\to\neuro-san"
 ```
 
-Configure the four Adobe values described below in the Neuro SAN Studio `.env`,
-activate its virtual environment, and run `ns run`. Select
-`industry/aep_batch_recovery` in Studio. The normal analysis appears in **Chat**
-and the sanitized API JSON appears in **SlyData** under `aep_api_response`.
+The installer adapts to the checkout it is given and then verifies itself, so a
+clean run ends with `Verification passed.` See
+[Install into a Neuro SAN checkout](#install-into-a-neuro-san-checkout) for what
+it detects, what the output means, and the two host layouts it supports.
+
+Configure the four Adobe values described below in the host `.env`, start the
+host's server, and select the network in the UI. The analysis appears in
+**Chat** and the sanitized API JSON appears in **SlyData** under
+`aep_api_response`.
 
 ## Agent Network
 
@@ -96,32 +101,117 @@ The custom application runs independently and does not require the Neuro SAN
 Python package. When copied into Neuro SAN Studio, the Adobe client automatically
 uses Neuro SAN's `CodedTool` base class.
 
-## Install into Neuro SAN Studio
+## Install into a Neuro SAN checkout
 
 ```powershell
-.\scripts\install_into_neuro_san.ps1 -NeuroSanPath "C:\path\to\neuro-san-studio"
+.\scripts\install_into_neuro_san.ps1 -NeuroSanPath "C:\path\to\neuro-san"
 ```
 
-Restart Neuro SAN, select `industry/aep_batch_recovery`, and submit a batch ID. Neuro SAN also needs a configured LLM provider for the reasoning agents. Adobe credentials remain server-side environment variables.
+Run it from this package's root. It is safe to re-run: every step is idempotent,
+and the manifest is only edited when the entry is missing.
 
-After the response completes, open the **SlyData** tab in Neuro SAN Studio to
-view `aep_api_response` as sanitized JSON. It contains the outputs from
+### Supported host layouts
+
+The installer detects the layout rather than assuming one, because the network
+name and the destination directories differ between them.
+
+| | Upstream `neuro-san-studio` | Neuro SAN V3 and other flat checkouts |
+|---|---|---|
+| Detected by | `registries/industry/manifest.hocon` | `registries/manifest.hocon` |
+| Registry file | `registries/industry/aep_batch_recovery.hocon` | `registries/aep_batch_recovery.hocon` |
+| Manifest entry | `"industry/aep_batch_recovery.hocon": true` | `"aep_batch_recovery.hocon": true` |
+| **Network name in the UI** | `industry/aep_batch_recovery` | `aep_batch_recovery` |
+| Coded tool package | `coded_tools/aep_batch_recovery/` | `agent_tools/aep_batch_recovery/` |
+
+The coded tool location follows the host: checkouts that already have an
+`agent_tools/` directory get the tool there, because `neuro-san` ships a
+top-level `coded_tools` package in site-packages that would otherwise shadow a
+local one. A stale copy left under `coded_tools/` by an earlier install is
+removed.
+
+The installer prints the network name it chose. Use that name in the UI — do not
+assume the `industry/` prefix.
+
+### What the installer verifies
+
+After copying, it reports a pass or fail instead of leaving breakage to surface
+at launch. It uses the host's `venv` or `.venv` and checks that:
+
+1. the network parses the way the server parses it — as a string, with the repo
+   root as the include basedir, which is what catches substitutions whose
+   include did not resolve;
+2. the coded tool imports from the tool path the server will use, and subclasses
+   `CodedTool`;
+3. the host's own `validate_registries.py` passes, if it has one. Some checkouts
+   gate startup on it, so a failure here means the server will refuse to launch;
+4. the four `AEP_*` values are present in the host `.env` or the environment. Any
+   that are missing are listed for you to add.
+
+Pass `-SkipChecks` to install without the verification pass.
+
+### Include paths and expected startup warnings
+
+The network file lists each shared include under more than one path, for example
+both `registries/aaosa.hocon` and `aaosa.hocon`. This is deliberate. The server
+parses network files with `ConfigFactory.parse_string`, which resolves includes
+against the process working directory, while registry validators parse them from
+disk, which resolves against the file's own directory. No single spelling works
+in both modes. A bare HOCON `include` is optional, so the path that does not
+apply logs `Cannot include file ...` and is skipped. Those warnings at startup
+are expected and harmless.
+
+If the host has no `registries/expertise_scoping_instructions.hocon`, the
+installer strips that include and its substitution from the installed copy and
+warns. The agent then runs without that shared prompt fragment.
+
+### Model selection
+
+The network sets `"model_name": ${?AGENT_MODEL_NAME}`, so the host's configured
+model wins and it falls back to the host's shared `config/llm_config.hocon`
+default when that variable is unset. This matters on checkouts whose shared
+default names a provider they have no key for. The host still needs a working
+LLM provider for the reasoning agents; Adobe credentials stay server-side
+environment variables.
+
+### After installing
+
+Start the host's server the way that checkout expects — Neuro SAN V3 uses
+`.\start-neurosan.ps1`, which sets `AGENT_MANIFEST_FILE` and `AGENT_TOOL_PATH`
+and works around spaces in the repo path; upstream Studio uses `ns run`. Then
+select the printed network name and submit a batch ID.
+
+To confirm the network registered without opening the UI:
+
+```powershell
+curl http://localhost:8080/api/v1/list
+```
+
+After the response completes, open the **SlyData** tab to view
+`aep_api_response` as sanitized JSON. It contains the outputs from
 `get_batch_status`, `list_failed_files`, and `inspect_failed_file` when those
 operations run. Credentials, authorization headers, and failed customer records
 are never added to this object.
 
-The installer also copies the custom frontend into the Neuro SAN checkout. From
-that checkout, run `python -m aep_batch_recovery.frontend_server` to launch it.
-
-To run Neuro SAN Studio and the custom frontend together, use separate terminals:
+The installer also copies the custom frontend into the host checkout. To run the
+server and the custom frontend together, use separate terminals:
 
 ```powershell
 # Terminal 1: Neuro SAN server and UI
-ns run
+.\start-neurosan.ps1        # or: ns run
 
 # Terminal 2: AEP custom frontend
 python -m aep_batch_recovery.frontend_server
 ```
+
+### If something still fails
+
+| Symptom | Cause |
+|---|---|
+| `Target is not a Neuro SAN checkout` | The path has neither manifest. Point `-NeuroSanPath` at the checkout root, not a subdirectory. |
+| `Registry validation failed` at launch | The host gates startup on its validator. Re-run the installer and read the validator output it prints. |
+| Network missing from the UI | The server was started before the install. Restart it; the manifest is read at startup. |
+| `missing_environment_variables` in the tool result | The `AEP_*` values are not set in the host `.env`. |
+| `NeuroSan already appears to be running on port(s)` | A previous run, or a stale listener whose process has already exited. Relaunch with `-ForceRestart`. |
 
 ## Test
 

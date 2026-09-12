@@ -2,9 +2,16 @@
 # Licensed under the Apache License, Version 2.0.
 
 {
+    # The Neuro SAN server resolves includes against the repo root (it parses the
+    # file as a string), while registry validators parse the file from disk and
+    # resolve against the file's own directory. pyhocon silently skips an include
+    # it cannot resolve, so list both spellings and let whichever applies win.
     include "registries/aaosa.hocon",
+    include "aaosa.hocon",
     include "registries/expertise_scoping_instructions.hocon",
+    include "expertise_scoping_instructions.hocon",
     include "config/llm_config.hocon",
+    include "../config/llm_config.hocon",
 
     "metadata": {
         "description": "Retrieves Adobe Experience Platform failed ingestion files, analyzes validation metadata, recommends governed recovery actions, and drafts an operational update.",
@@ -12,6 +19,11 @@
         "sample_queries": [
             "Analyze failed files for AEP batch 01ABCDEF1234567890 and prepare a recovery update."
         ]
+    },
+
+    # Let the host deployment pick the provider/model without editing this file.
+    "llm_config": {
+        "model_name": ${?AGENT_MODEL_NAME}
     },
 
     "instructions_prefix": """
