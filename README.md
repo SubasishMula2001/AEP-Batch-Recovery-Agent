@@ -144,10 +144,29 @@ at launch. It uses the host's `venv` or `.venv` and checks that:
    `CodedTool`;
 3. the host's own `validate_registries.py` passes, if it has one. Some checkouts
    gate startup on it, so a failure here means the server will refuse to launch;
-4. the four `AEP_*` values are present in the host `.env` or the environment. Any
-   that are missing are listed for you to add.
+4. the four `AEP_*` values have real values, and lists any that are still empty.
 
 Pass `-SkipChecks` to install without the verification pass.
+
+### Adobe credential placeholders
+
+The installer appends the `AEP_*` keys it does not find to the host checkout's
+`.env`, creating the file if there is none, so there is nothing to copy by hand:
+
+```dotenv
+# Adobe Experience Platform credentials for the AEP Batch Recovery Agent.
+# Added by install_into_neuro_san.ps1. Fill these in; never commit real values.
+AEP_ACCESS_TOKEN=
+AEP_API_KEY=
+AEP_ORG_ID=
+AEP_SANDBOX_NAME=
+```
+
+Only absent keys are appended, always with an empty value. An existing line is
+never edited and a credential is never written, so re-running the installer
+cannot clobber values you have already filled in. If the host is a git checkout
+that does not ignore `.env`, the installer warns before you put real credentials
+in it. Pass `-SkipEnvSeed` to leave the host `.env` untouched.
 
 ### Include paths and expected startup warnings
 

@@ -3,7 +3,10 @@ param(
     [string]$NeuroSanPath,
 
     # Skip the post-install verification pass (registry validation, tool import).
-    [switch]$SkipChecks
+    [switch]$SkipChecks,
+
+    # Do not append empty AEP_* placeholders to the target checkout's .env.
+    [switch]$SkipEnvSeed
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,6 +109,49 @@ Write-Host "  registry:   $(Get-RelativeToTarget $hoconDest)"
 Write-Host "  coded tool: $toolRoot\aep_batch_recovery"
 Write-Host "  manifest:   $(Get-RelativeToTarget $manifest)"
 
+# --- Adobe credential placeholders -------------------------------------------
+# The coded tool reads these from the environment at call time. A missing value
+# is not a crash - the tool returns a clean error listing what is absent - but it
+# is the most common reason the agent appears not to work after a clean install.
+# Only the keys that are actually absent are appended, always with an empty
+# value: this script never writes a credential and never edits an existing line.
+$envFile = Join-Path $target ".env"
+$requiredEnv = @("AEP_ACCESS_TOKEN", "AEP_API_KEY", "AEP_ORG_ID", "AEP_SANDBOX_NAME")
+$envText = if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile -Raw } else { "" }
+if ($null -eq $envText) { $envText = "" }
+
+# A key already present with a value needs nothing. A key present but empty is
+# still a placeholder the user has to fill, so do not duplicate it either.
+$missingEnv = @($requiredEnv | Where-Object { $envText -notmatch "(?m)^\s*$_\s*=" })
+$unsetEnv = @($requiredEnv | Where-Object {
+    -not ($envText -match "(?m)^\s*$_\s*=\s*\S") -and -not [Environment]::GetEnvironmentVariable($_)
+})
+
+if ($missingEnv -and -not $SkipEnvSeed) {
+    $block = New-Object Text.StringBuilder
+    if ($envText -and -not $envText.EndsWith("`n")) { [void]$block.Append("`r`n") }
+    [void]$block.Append("`r`n# Adobe Experience Platform credentials for the AEP Batch Recovery Agent.`r`n")
+    [void]$block.Append("# Added by install_into_neuro_san.ps1. Fill these in; never commit real values.`r`n")
+    foreach ($name in $missingEnv) { [void]$block.Append("$name=`r`n") }
+
+    [IO.File]::AppendAllText($envFile, $block.ToString(), [Text.UTF8Encoding]::new($false))
+    Write-Host ""
+    if ($envText) {
+        Write-Host "Appended $($missingEnv.Count) empty placeholder(s) to $(Get-RelativeToTarget $envFile): $($missingEnv -join ', ')"
+    }
+    else {
+        Write-Host "Created $(Get-RelativeToTarget $envFile) with empty placeholders: $($missingEnv -join ', ')"
+    }
+
+    # Seeding a .env is only safe if the host will not commit it.
+    $hostIgnore = Join-Path $target ".gitignore"
+    $ignoresEnv = (Test-Path -LiteralPath $hostIgnore) -and
+        ((Get-Content -LiteralPath $hostIgnore) -match '^\s*\.env\s*$')
+    if ((Test-Path -LiteralPath (Join-Path $target ".git")) -and -not $ignoresEnv) {
+        Write-Warning "$(Get-RelativeToTarget $envFile) does not appear to be git-ignored in this checkout. Add '.env' to .gitignore before putting real credentials in it."
+    }
+}
+
 # --- Post-install verification -----------------------------------------------
 # Everything below only reports; the install itself is already complete.
 if ($SkipChecks) { return }
@@ -186,16 +232,6 @@ finally {
     Remove-Item -LiteralPath $parseFile -Force -ErrorAction SilentlyContinue
 }
 
-# 4. Adobe credentials are read from the environment at call time. A missing value
-#    is not a crash (the tool returns a clean error), but it is the most common
-#    reason the agent "does not work" after a clean install.
-$envFile = Join-Path $target ".env"
-$required = @("AEP_ACCESS_TOKEN", "AEP_API_KEY", "AEP_ORG_ID", "AEP_SANDBOX_NAME")
-$envText = if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile -Raw } else { "" }
-$missingEnv = $required | Where-Object {
-    -not ($envText -match "(?m)^\s*$_\s*=\s*\S") -and -not [Environment]::GetEnvironmentVariable($_)
-}
-
 Write-Host ""
 if ($problems) {
     Write-Warning "Installed, but verification found problems:"
@@ -205,10 +241,11 @@ else {
     Write-Host "Verification passed."
 }
 
-if ($missingEnv) {
+# The placeholders were written above; these still have no value to use.
+if ($unsetEnv) {
     Write-Host ""
-    Write-Host "Before using the agent, add these to $envFile :"
-    $missingEnv | ForEach-Object { Write-Host "  $_=" }
+    Write-Host "Fill in these values in $(Get-RelativeToTarget $envFile) before using the agent:"
+    $unsetEnv | ForEach-Object { Write-Host "  $_=" }
 }
 
 Write-Host ""
