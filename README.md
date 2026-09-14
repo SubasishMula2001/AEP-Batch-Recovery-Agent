@@ -43,9 +43,13 @@ To add the network and custom frontend to an existing Neuro SAN checkout:
 ```
 
 The installer adapts to the checkout it is given and then verifies itself, so a
-clean run ends with `Verification passed.` See
-[Install into a Neuro SAN checkout](#install-into-a-neuro-san-checkout) for what
-it detects, what the output means, and the two host layouts it supports.
+clean run ends with `Verification passed.`
+
+**New here? Follow [docs/INSTALL.md](docs/INSTALL.md)** — the step-by-step
+walkthrough, with prerequisites, expected output, troubleshooting, and
+uninstall. The [Install into a Neuro SAN
+checkout](#install-into-a-neuro-san-checkout) section below is the reference for
+what the installer detects and why.
 
 Configure the four Adobe values described below in the host `.env`, start the
 host's server, and select the network in the UI. The analysis appears in
