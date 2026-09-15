@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -14,12 +15,40 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = Path(__file__).resolve().parent / "frontend"
-CODED_TOOLS = ROOT / "coded_tools"
 load_dotenv(ROOT / ".env")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from coded_tools.aep_batch_recovery.adobe_failed_batch import AdobeFailedBatch  # noqa: E402
+# The Adobe client lives in this package's coded_tools/ when the app runs from
+# its own checkout, and in the host's tool package once installed into a Neuro
+# SAN checkout. Some hosts name that agent_tools/ because site-packages ships a
+# top-level coded_tools that would shadow a local one, so the name is not fixed.
+TOOL_PACKAGES = ("coded_tools", "agent_tools")
+TOOL_PACKAGE: str | None = None
+AdobeFailedBatch = None
+
+for _candidate in TOOL_PACKAGES:
+    try:
+        _module = importlib.import_module(f"{_candidate}.aep_batch_recovery.adobe_failed_batch")
+    except ModuleNotFoundError as exc:
+        # Only move on when it is this candidate that is absent. A genuinely
+        # missing dependency of the tool must not be reported as a layout
+        # problem, which would send you looking in the wrong place.
+        if exc.name == _candidate or (exc.name or "").startswith(f"{_candidate}."):
+            continue
+        raise
+    AdobeFailedBatch = _module.AdobeFailedBatch
+    TOOL_PACKAGE = _candidate
+    break
+
+if AdobeFailedBatch is None:
+    raise ModuleNotFoundError(
+        "Could not import the Adobe coded tool. Looked for "
+        + " and ".join(f"{name}.aep_batch_recovery.adobe_failed_batch" for name in TOOL_PACKAGES)
+        + f" under {ROOT}. Install the agent into this checkout with "
+        "scripts/install_into_neuro_san.ps1, or run this app from the "
+        "AEP-Batch-Recovery-Agent checkout."
+    )
 
 
 class AnalyzeRequest(BaseModel):
@@ -39,7 +68,7 @@ def index() -> FileResponse:
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     missing = [name for name in AdobeFailedBatch.REQUIRED_ENV if not os.environ.get(name, "").strip()]
-    return {"status": "ok", "live_ready": not missing, "missing": missing}
+    return {"status": "ok", "live_ready": not missing, "missing": missing, "tool_package": TOOL_PACKAGE}
 
 
 @app.post("/api/analyze")
