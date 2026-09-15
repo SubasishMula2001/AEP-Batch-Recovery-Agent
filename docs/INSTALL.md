@@ -14,6 +14,7 @@ with the implementation detail behind each step.
 - [Step 5 — Use the agent](#step-5--use-the-agent)
 - [Optional: the standalone app](#optional-the-standalone-app)
 - [What the installer changes](#what-the-installer-changes)
+- [Host problems that look like agent failures](#host-problems-that-look-like-agent-failures)
 - [Troubleshooting](#troubleshooting)
 - [Uninstalling](#uninstalling)
 - [Upgrading](#upgrading)
@@ -233,6 +234,153 @@ ships a top-level `coded_tools` package in site-packages that shadows a local
 one, so a tool installed there would not be found. If an earlier install left a
 copy under `coded_tools\aep_batch_recovery\`, the installer removes it.
 
+## Host problems that look like agent failures
+
+Two failures come up often on a first run, and neither is a bug in this package.
+Both live in the **Neuro SAN checkout**, not here, so re-running the installer
+will not help — and because they surface *through* the agent, they are easy to
+misread as the agent being broken.
+
+This package does not ship `start-neurosan.ps1` or any other platform file. It
+installs into a Neuro SAN checkout; it does not distribute Neuro SAN. If you fix
+one of these, the fix lives in your Neuro SAN folder — it does not travel with
+this repository, and a fresh copy of Neuro SAN will need it again.
+
+### `ANTHROPIC_API_KEY is missing or still a placeholder in .env`
+
+You see this at launch, before anything loads, even though you are using OpenAI
+and `OPENAI_API_KEY` is set correctly.
+
+Some Neuro SAN V3 snapshots ship a launcher that requires an Anthropic key
+outright, predating multi-provider support. Check which one you have:
+
+```powershell
+Select-String -Path .\start-neurosan.ps1 -Pattern 'ANTHROPIC_API_KEY|OPENAI_API_KEY'
+```
+
+If the only hit is a `Write-Error` guard and `OPENAI_API_KEY` appears nowhere,
+that copy only supports Claude. Your key was never looked at.
+
+Either set `ANTHROPIC_API_KEY` in `.env` and use Claude, or replace the guard
+with provider detection. Find this in `start-neurosan.ps1`:
+
+```powershell
+if (-not $env:ANTHROPIC_API_KEY -or $env:ANTHROPIC_API_KEY -match '(?i)(your[-_]|replace[-_]?me|change[-_]?me|placeholder)') {
+    Write-Error "ANTHROPIC_API_KEY is missing or still a placeholder in .env."
+    exit 1
+}
+```
+
+and replace it with:
+
+```powershell
+$placeholder = '(?i)(your[-_]|replace[-_]?me|change[-_]?me|placeholder)'
+function Test-RealKey {
+    param([string]$Value)
+    return [bool]($Value -and $Value -notmatch $placeholder)
+}
+$hasAnthropic = Test-RealKey $env:ANTHROPIC_API_KEY
+$hasOpenAI = Test-RealKey $env:OPENAI_API_KEY
+
+if (-not $hasAnthropic -and -not $hasOpenAI) {
+    Write-Error "No usable LLM key in .env. Set ANTHROPIC_API_KEY (Claude) or OPENAI_API_KEY (OpenAI) to a real value."
+    exit 1
+}
+if (-not $env:AGENT_MODEL_NAME) {
+    $env:AGENT_MODEL_NAME = if ($hasAnthropic) { "claude-sonnet" } else { "gpt-5.5" }
+}
+if (-not $env:AGENT_PLANNER_MODEL_NAME) {
+    $env:AGENT_PLANNER_MODEL_NAME = if ($hasAnthropic) { "claude-sonnet-5" } else { $env:AGENT_MODEL_NAME }
+}
+Write-Host "LLM provider: $(if ($hasAnthropic) { 'Anthropic' } else { 'OpenAI' })  model: $env:AGENT_MODEL_NAME"
+```
+
+Back the file up first. Pin a specific model with `AGENT_MODEL_NAME` in `.env`;
+an explicit value always wins over the default above.
+
+### `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate`
+
+In the UI this reads:
+
+```
+Error from aep_batch_recovery_manager: Agent stopped due to exception Connection error.
+```
+
+with a long traceback ending in `httpcore.ConnectError: [SSL:
+CERTIFICATE_VERIFY_FAILED]` and `openai.APIConnectionError`.
+
+Read the traceback before assuming it is an Adobe problem. If the frames go
+through `langchain_openai` or `openai`, the failing call is to the **model
+provider**, and the Adobe tool never ran.
+
+The cause is corporate TLS inspection. A proxy such as Zscaler, Netskope, or
+Blue Coat terminates HTTPS and re-signs it with its own CA. That CA is trusted
+by Windows — which is why your browser is fine — but Python verifies against
+the `certifi` bundle, which contains only public CAs.
+
+**1. Confirm it.** Print the certificate your machine is actually served:
+
+```powershell
+.\venv\Scripts\python.exe -c "import ssl, socket; from cryptography import x509; ctx = ssl._create_unverified_context(); s = socket.create_connection(('api.openai.com', 443), timeout=15); print(x509.load_der_x509_certificate(ctx.wrap_socket(s, server_hostname='api.openai.com').getpeercert(True)).issuer.rfc4514_string())"
+```
+
+A public issuer means something else is wrong. A corporate name — `Zscaler`,
+`Netskope`, your employer — confirms interception. Note the name.
+
+**2. Build a bundle** holding the public CAs plus your proxy's root. Set
+`$name` to what step 1 printed, and run this from the Neuro SAN checkout:
+
+```powershell
+$name = "Zscaler"   # whatever step 1 showed
+$dir = Join-Path $env:USERPROFILE ".certs"
+New-Item -ItemType Directory -Force $dir | Out-Null
+$certifi = & .\venv\Scripts\python.exe -c "import certifi; print(certifi.where())"
+$pem = Get-Content -LiteralPath $certifi -Raw
+$found = 0
+Get-ChildItem Cert:\LocalMachine\Root, Cert:\CurrentUser\Root -ErrorAction SilentlyContinue |
+  Where-Object { $_.Subject -match $name } | Sort-Object Thumbprint -Unique | ForEach-Object {
+    $b64 = [Convert]::ToBase64String($_.RawData, 'InsertLineBreaks')
+    $pem += "`r`n# $($_.Subject)`r`n-----BEGIN CERTIFICATE-----`r`n$b64`r`n-----END CERTIFICATE-----`r`n"
+    $found++
+  }
+if ($found -eq 0) { Write-Error "No CA matching '$name' in the Windows store." }
+$bundle = Join-Path $dir "corporate-ca-bundle.pem"
+[IO.File]::WriteAllText($bundle, $pem, [Text.UTF8Encoding]::new($false))
+Write-Host "Wrote $bundle (added $found proxy CA certificate(s))"
+```
+
+**3. Point Python at it** by adding both variables to the Neuro SAN `.env`:
+
+```dotenv
+SSL_CERT_FILE=C:\Users\you\.certs\corporate-ca-bundle.pem
+REQUESTS_CA_BUNDLE=C:\Users\you\.certs\corporate-ca-bundle.pem
+```
+
+Both are needed; they cover different clients. `httpx` reads `SSL_CERT_FILE`,
+which is the model provider's path. The Adobe coded tool uses `requests`, which
+reads `REQUESTS_CA_BUNDLE`. Setting only the first fixes the model call and then
+fails again on the Adobe call.
+
+**4. Verify**, then restart Neuro SAN:
+
+```powershell
+$env:SSL_CERT_FILE = "$env:USERPROFILE\.certs\corporate-ca-bundle.pem"
+$env:REQUESTS_CA_BUNDLE = $env:SSL_CERT_FILE
+.\venv\Scripts\python.exe -c "import httpx, requests; print('openai:', httpx.get('https://api.openai.com/v1/models', timeout=20).status_code); print('adobe: ', requests.get('https://platform.adobe.io/data/foundation/catalog/batches', timeout=20).status_code)"
+```
+
+`openai: 401` and `adobe: 403` are the **success** result: TLS verified, and the
+only thing missing is an auth header. Any `SSLError` means the bundle is not
+being used — check the path.
+
+Prefer this over the alternatives. Editing `certifi/cacert.pem` inside the venv
+works until something reinstalls `certifi`. Setting `verify=False` or
+`PYTHONHTTPSVERIFY=0` disables certificate checking for every connection,
+including the one carrying your Adobe access token — do not.
+
+The bundle is a snapshot of `certifi` at the time you built it. If verification
+later fails against a *public* site, rebuild it.
+
 ## Troubleshooting
 
 | Message | Cause and fix |
@@ -244,6 +392,8 @@ copy under `coded_tools\aep_batch_recovery\`, the installer removes it.
 | `Cannot include file aaosa.hocon` at startup | Expected and harmless. The network lists each shared include under more than one path because the server and the registry validators resolve include paths differently; the path that does not apply is skipped with this warning. |
 | `No venv found ... skipping verification` | The checkout's Python environment is not set up. Run its Python setup, then re-run the installer to get the verification pass. |
 | `NeuroSan already appears to be running on port(s)` | A live server, or a stale listener whose process already exited. Relaunch with `-ForceRestart`. |
+| `ANTHROPIC_API_KEY is missing or still a placeholder` | Your launcher predates multi-provider support and never checks `OPENAI_API_KEY`. See [Host problems](#host-problems-that-look-like-agent-failures). |
+| `Agent stopped due to exception Connection error` with `CERTIFICATE_VERIFY_FAILED` | Corporate TLS inspection; Python does not use the Windows certificate store. See [Host problems](#host-problems-that-look-like-agent-failures). |
 | `does not appear to be git-ignored` | Your checkout would commit `.env`. Add `.env` to its `.gitignore` before putting real credentials in the file. |
 | `dubious ownership in repository` from git | The clone is owned by another account, commonly `BUILTIN\Administrators`. Run the `git config --global --add safe.directory ...` command git suggests. |
 
